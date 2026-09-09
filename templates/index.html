@@ -1,0 +1,22 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>{{ config.name }} · Polaris</title><link rel="stylesheet" href="/static/style.css"></head><body><div class="shell"><header><a class="brand" href="/">✳ <strong>polaris</strong><span>by impacte</span></a><form action="/logout" method="post"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="quiet">Sign out ↗</button></form></header><main><div class="eyebrow">YOUR ICEBERG CATALOG</div><div class="title"><h1>{{ config.name }}</h1><span class="badge">Apache Polaris 1.7.0</span></div><p class="lead">One catalog. Every engine. Your data stays in your bucket.</p><section class="stats"><article><label>CATALOG BACKEND</label><h2>PostgreSQL</h2><p>Persistent across deployments</p></article><article><label>WAREHOUSE LOCATION</label><h2 class="location">s3://{{ config.bucket }}/{{ config.name }}/</h2><p>{{ config.region }} · S3-compatible storage</p></article><article><label>ACCESS</label><h2>OAuth 2.0</h2><p>Native Polaris authentication</p></article></section>{% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}<section class="panel"><div class="section-title"><h2>Explore your catalog</h2><a href="/">Refresh ↻</a></div><div class="explorer"><nav aria-label="Namespaces"><h3>Namespaces</h3>{% for namespace in namespaces %}<a class="namespace" href="/?namespace={{ namespace|join('\x1f')|urlencode }}">▧ {{ namespace|join('.') }}</a>{% else %}<p class="muted">No namespaces yet.</p>{% endfor %}</nav><div class="table-area">{% if tables %}<table><thead><tr><th>Table</th><th>Namespace</th></tr></thead><tbody>{% for table in tables %}<tr><td>{{ table.name }}</td><td>{{ table.namespace|join('.') }}</td></tr>{% endfor %}</tbody></table>{% else %}<div class="empty"><div>▧</div><h3>{{ 'No tables in this namespace' if selected else 'Ready for your first table' }}</h3><p>{{ 'Create a table using your Iceberg client, then refresh.' if selected else 'Connect an Iceberg client below, or select a namespace.' }}</p></div>{% endif %}</div></div></section><section class="panel"><div class="section-title"><h2>Connect your tools</h2><span class="muted">Python · PyIceberg</span></div><p>Install <code>pyiceberg[pyarrow]</code>. Set the credentials below in your client environment.</p><div class="endpoint"><label>REST ENDPOINT</label><code>{{ config.public }}/api/catalog</code></div><pre><code>import os
+from pyiceberg.catalog import load_catalog
+
+catalog = load_catalog(
+    "{{ config.name }}",
+    type="rest",
+    uri="{{ config.public }}/api/catalog",
+    warehouse="{{ config.name }}",
+    credential=os.environ["POLARIS_CLIENT_ID"] + ":" + os.environ["POLARIS_CLIENT_SECRET"],
+    scope="PRINCIPAL_ROLE:ALL",
+    **{
+        "header.X-Iceberg-Access-Delegation": "",
+        "oauth2-server-uri": "{{ config.public }}/api/catalog/v1/oauth/tokens",
+        "s3.endpoint": "{{ config.endpoint }}",
+        "s3.region": "{{ config.region }}",
+        "s3.access-key-id": os.environ["AWS_ACCESS_KEY_ID"],
+        "s3.secret-access-key": os.environ["AWS_SECRET_ACCESS_KEY"],
+        "s3.force-virtual-addressing": "{{ 'false' if config.path_style else 'true' }}",
+    },
+)
+catalog.create_namespace_if_not_exists("demo")
+print(catalog.list_namespaces())</code></pre><p class="hint">This template uses direct S3 credentials. Configure them in each client; the catalog does not vend temporary storage credentials. Use the bootstrap account to get started, then create dedicated principals for applications.</p></section></main><footer>APACHE POLARIS · RAILWAY TEMPLATE <a href="https://github.com/impacte-tech/polaris-template">Source ↗</a></footer></div></body></html>

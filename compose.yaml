@@ -1,0 +1,68 @@
+# Local integration environment. Moto emulates S3; use real S3 storage on Railway.
+services:
+  catalog:
+    build: .
+    mem_limit: 1g
+    ports:
+      - "127.0.0.1:${HOST_PORT:-8080}:8080"
+    env_file: .env
+    environment:
+      # Moto does not decode the AWS SDK optional streaming checksum framing.
+      AWS_REQUEST_CHECKSUM_CALCULATION: WHEN_REQUIRED
+      AWS_RESPONSE_CHECKSUM_VALIDATION: WHEN_REQUIRED
+    depends_on:
+      postgres:
+        condition: service_healthy
+      create-bucket:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')"]
+      interval: 5s
+      timeout: 5s
+      retries: 40
+  postgres:
+    image: postgres:17.6-bookworm
+    environment:
+      POSTGRES_USER: polaris
+      POSTGRES_PASSWORD: local-development-only
+      POSTGRES_DB: polaris
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U polaris"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+  storage:
+    image: motoserver/moto:5.1.11
+    environment:
+      MOTO_PORT: "5000"
+  create-bucket:
+    image: motoserver/moto:5.1.11
+    entrypoint: ["python", "-c"]
+    command:
+      - |
+        import time, boto3
+        client = boto3.client('s3', endpoint_url='http://storage:5000', region_name='us-east-1', aws_access_key_id='local-test-key', aws_secret_access_key='local-test-secret')
+        for attempt in range(60):
+            try:
+                client.create_bucket(Bucket='warehouse')
+                break
+            except Exception:
+                if attempt == 59: raise
+                time.sleep(1)
+    depends_on:
+      - storage
+  smoke:
+    profiles: [test]
+    build:
+      context: .
+      dockerfile: tests/Dockerfile
+    env_file: .env
+    environment:
+      CATALOG_URI: http://catalog:8080/api/catalog
+    depends_on:
+      catalog:
+        condition: service_healthy
+volumes:
+  postgres-data:
