@@ -1,4 +1,5 @@
 """Bootstrap once, initialize a warehouse, and supervise both local processes."""
+
 import json
 import os
 import signal
@@ -27,25 +28,43 @@ def stop(signum=None, frame=None):
 
 def initialize(config):
     with httpx.Client(base_url="http://127.0.0.1:8181", timeout=30) as client:
-        response = client.post("/api/catalog/v1/oauth/tokens", data={
-            "grant_type": "client_credentials", "client_id": config["client"],
-            "client_secret": config["secret"], "scope": "PRINCIPAL_ROLE:ALL"})
+        response = client.post(
+            "/api/catalog/v1/oauth/tokens",
+            data={
+                "grant_type": "client_credentials",
+                "client_id": config["client"],
+                "client_secret": config["secret"],
+                "scope": "PRINCIPAL_ROLE:ALL",
+            },
+        )
         if response.status_code != 200:
-            raise RuntimeError("Polaris login failed. Existing database credentials must match POLARIS_CLIENT_ID/SECRET; changing environment variables does not rotate them.")
-        client.headers.update({"Authorization": "Bearer " + response.json()["access_token"]})
+            raise RuntimeError(
+                "Polaris login failed. Existing database credentials must match POLARIS_CLIENT_ID/SECRET; changing environment variables does not rotate them."
+            )
+        client.headers.update(
+            {"Authorization": "Bearer " + response.json()["access_token"]}
+        )
         path = "/api/management/v1/catalogs/" + config["name"]
         response = client.get(path)
         expected = catalog_payload(config)["catalog"]
         if response.status_code == 404:
-            response = client.post("/api/management/v1/catalogs", json={"catalog": expected})
+            response = client.post(
+                "/api/management/v1/catalogs", json={"catalog": expected}
+            )
             response.raise_for_status()
             print("Created warehouse", config["name"], flush=True)
         else:
             response.raise_for_status()
             existing = response.json()
-            if (existing["properties"].get("default-base-location") != expected["properties"]["default-base-location"]
-                or any(existing["storageConfigInfo"].get(k) != v for k, v in expected["storageConfigInfo"].items())):
-                raise RuntimeError("Existing warehouse differs from storage environment variables. Restore the original settings or explicitly update the catalog through the management API.")
+            if existing["properties"].get("default-base-location") != expected[
+                "properties"
+            ]["default-base-location"] or any(
+                existing["storageConfigInfo"].get(k) != v
+                for k, v in expected["storageConfigInfo"].items()
+            ):
+                raise RuntimeError(
+                    "Existing warehouse differs from storage environment variables. Restore the original settings or explicitly update the catalog through the management API."
+                )
             print("Warehouse already initialized; preserving catalog state", flush=True)
 
 
@@ -72,17 +91,47 @@ def main():
                 raise RuntimeError("PostgreSQL did not become available") from None
             time.sleep(2)
     with tempfile.NamedTemporaryFile(mode="w", suffix=".json") as credentials:
-        json.dump({"POLARIS": {"client-id": config["client"], "client-secret": config["secret"]}}, credentials)
+        json.dump(
+            {
+                "POLARIS": {
+                    "client-id": config["client"],
+                    "client-secret": config["secret"],
+                }
+            },
+            credentials,
+        )
         credentials.flush()
-        bootstrap = subprocess.Popen(["java", "-Xmx256m", "-jar", "/opt/polaris-admin/polaris-admin-tool.jar",
-                                      "bootstrap", "--credentials-file=" + credentials.name], env=env)
+        bootstrap = subprocess.Popen(
+            [
+                "java",
+                "-Xmx256m",
+                "-jar",
+                "/opt/polaris-admin/polaris-admin-tool.jar",
+                "bootstrap",
+                "--credentials-file=" + credentials.name,
+            ],
+            env=env,
+        )
         children.append(bootstrap)
         if bootstrap.wait() != 0:
             raise RuntimeError("Polaris database bootstrap failed")
     if stopping:
         return
-    java = subprocess.Popen(["java", "-XX:MaxRAMPercentage=65", "-XX:+ExitOnOutOfMemoryError",
-                             "-jar", "/opt/polaris/quarkus-run.jar"], env=env)
+    java = subprocess.Popen(
+        [
+            "java",
+            "-XX:MaxRAMPercentage=65",
+            "-XX:+ExitOnOutOfMemoryError",
+            # Disable cloud metadata probes (GCP/AWS/Azure) that can hang on
+            # platforms without a metadata server, e.g. Railway.
+            "-Dotel.resource.providers.gcp.enabled=false",
+            "-Dotel.resource.providers.aws.enabled=false",
+            "-Dotel.resource.providers.azure.enabled=false",
+            "-jar",
+            "/opt/polaris/quarkus-run.jar",
+        ],
+        env=env,
+    )
     children.append(java)
     for attempt in range(120):
         if stopping:
@@ -91,7 +140,9 @@ def main():
             raise RuntimeError("Polaris exited during startup")
         try:
             # The OAuth endpoint only becomes available once the application is listening.
-            response = httpx.get("http://127.0.0.1:8181/api/catalog/v1/config", timeout=2)
+            response = httpx.get(
+                "http://127.0.0.1:8181/api/catalog/v1/config", timeout=2
+            )
             if response.status_code in (200, 400, 401, 403):
                 break
         except httpx.HTTPError:
@@ -100,8 +151,19 @@ def main():
     else:
         raise RuntimeError("Polaris did not start within 120 seconds")
     initialize(config)
-    web = subprocess.Popen([sys.executable, "-m", "uvicorn", "server:app", "--host", "0.0.0.0",
-                            "--port", os.environ.get("PORT", "8080"), "--no-access-log"])
+    web = subprocess.Popen(
+        [
+            sys.executable,
+            "-m",
+            "uvicorn",
+            "server:app",
+            "--host",
+            "0.0.0.0",
+            "--port",
+            os.environ.get("PORT", "8080"),
+            "--no-access-log",
+        ]
+    )
     children.append(web)
     print("Catalog and dashboard started", flush=True)
     while not stopping:
